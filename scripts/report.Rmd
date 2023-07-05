@@ -1,0 +1,477 @@
+---
+title: Report
+date: '`r format(Sys.time(), "%Y-%m-%d-%H-%M")`'
+output:
+  workflowr::wflow_html:
+    toc: yes
+    toc_float: yes
+    toc_depth: 3
+    code_folding: hide
+    theme: cosmo
+    highlight: textmate
+    df_print: paged
+workflowr:
+  suppress_report: TRUE
+params:
+  bin_name: "10_micron"
+  family: "constant"
+  l: "20"
+  prefix: ""
+  nn: ""
+---
+
+# Packages
+
+```{r}
+suppressPackageStartupMessages({
+  library(mistyR)
+  library(tidyverse)
+  library(factoextra)
+  library(png)
+  library(here)
+  library(igraph)
+})
+```
+
+# Configs
+
+```{r}
+here::i_am("scripts/report.Rmd")
+bin_name <- params$bin_name
+family <- params$family
+l <- params$l
+prefix <- params$prefix
+nn <- params$nn
+config_string <- paste0(bin_name, "_", family, "_", l, "_", prefix, "_", nn)
+config_string
+```
+
+```{r}
+source(here::here("config.R"))
+source(here::here("scripts", "utils.R"))
+```
+
+# Load Data
+
+```{r}
+### load processed data ###
+file_data <- readRDS(here::here("processed_data", "file_data.RDS"))
+coords <- readRDS(here::here("processed_data", paste0("coords_", bin_name, ".RDS")))
+cluster_counts <- readRDS(here::here("processed_data", paste0("cluster_counts_", bin_name, ".RDS")))
+all(names(coords) == names(cluster_counts)) # check
+img_names <- names(cluster_counts)
+
+# Stratify clusters based on whether they are specific or unspecific (see Mail by Malte).
+stopifnot(all(sort(c(unspecific_clusters, specific_clusters)) == sort(all_clusters)))
+
+# Prepare indexing by character. The clusters are names from 0 to 46 which is convenient in Python (0-based indexing), 
+# but annoying in R (1-based indexing). So I will just index by character.
+for (img_name in names(cluster_counts)) {
+  # take care of cluster counts
+  mtx <- cluster_counts[[img_name]]
+  colnames(mtx) <- all_clusters
+  cluster_counts[[img_name]] <- mtx
+  
+  # take care of coordinates
+  c_mtx <- coords[[img_name]]
+  colnames(c_mtx) <- c("x", "y")
+  coords[[img_name]] <- c_mtx
+}
+
+in_file <- paste0(processed_data_dir, .Platform$file.sep, "all_views_", config_string, ".RDS")
+print(paste0("Reading views from: ", in_file))
+all_views <- readRDS(in_file)
+```
+
+# Results Global
+
+```{r}
+results <- readRDS(here::here(misty_dir, paste0( "global_", config_string, ".RDS")))
+name_paraview <- grep("para.+", unique(results$importances$view), value=TRUE)
+name_paraview_long <- grep("para.+", names(all_views[[1]]), value=TRUE)
+rm(all_views); gc()
+
+results$importances <- results$importances %>%
+  dplyr::mutate(Predictor = str_remove(Predictor, "^p_"))
+
+# first compute the mean importances per patient, then aggregate
+results$importances.aggregated <- results$importances %>%
+  dplyr::mutate(sample=basename(sample)) %>%
+  dplyr::left_join(file_data %>% dplyr::select(filename, unique_patient_id),
+                   by=c("sample" = "filename")) %>%
+  dplyr::group_by(view, Predictor, Target, unique_patient_id) %>%
+  dplyr::summarise(Importance = mean(Importance), .groups = "drop_last") %>%
+  dplyr::summarise(Importance = mean(Importance), nsamples = n(), .groups = "drop")
+```
+
+## Performance
+
+```{r}
+results %>%
+  plot_improvement_stats("gain.R2")
+```
+
+## View Contributions
+
+```{r}
+results %>% plot_view_contributions()
+```
+
+## Importances
+
+```{r fig.width=8, fig.height=8}
+results %>% plot_interaction_heatmap(view = "intra", cutoff = 0, clean=TRUE)
+```
+
+```{r fig.width=8, fig.height=8}
+results %>% plot_interaction_heatmap(view = name_paraview, cutoff = 0, clean=TRUE)
+```
+
+## Signatures
+
+### Performance
+
+```{r}
+perf_sign <- mistyR::extract_signature(results, "performance")
+perf_sign_pca <- stats::prcomp(perf_sign %>% select(matches("gain.R2")))
+```
+
+No clusters here.
+
+```{r}
+ggplot() +
+  geom_point(aes(x=perf_sign_pca$x[,1], y=perf_sign_pca$x[,2]))
+```
+
+### Importances
+
+```{r}
+imp_sign <- mistyR::extract_signature(results, "importance")
+imp_sign_pca <- stats::prcomp(imp_sign %>% dplyr::select(-sample))
+```
+
+We see two clusters in the first principal components.
+
+```{r}
+tibble(x=imp_sign_pca$x[,1], y=imp_sign_pca$x[,2]) %>%
+  ggplot() +
+  geom_point(aes(x=x, y=y))
+```
+
+What drives the seperation?
+
+```{r}
+fviz_pca_var(imp_sign_pca, col.var="contrib",
+             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+             repel = TRUE, select.var = list("contrib"=20))
+```
+
+What could explain the separation?
+
+Looking at the sample metadata we see that we can clearly distinguish Diabetic-Neophropathy vs CKD/Non-CKD. So this should be reflected in the importance contrasts.
+
+```{r fig.width=10, fig.height=8}
+purrr::map(c("group_new", "egfr_mdrd", "ckd_stage", "age", "ischemic_time", "sex_m0f1"), function(v) {
+  v <- sym(v)
+  tibble(x=imp_sign_pca$x[,1], y=imp_sign_pca$x[,2],
+         sample=basename(imp_sign$sample)) %>%
+    dplyr::left_join(file_data, by=c("sample"="filename")) %>%
+    dplyr::mutate(sex_m0f1 = as.factor(sex_m0f1)) %>%
+    ggplot() +
+    geom_point(aes(x=x, y=y, color=!!v), size=1)
+}) %>%
+  cowplot::plot_grid(plotlist=., ncol=2)
+```
+
+Let's look at the first 3 principal components.
+
+```{r fig.width=10, fig.height=4}
+p1 <- tibble(x=imp_sign_pca$x[,1], y=imp_sign_pca$x[,2],
+       sample=basename(imp_sign$sample)) %>%
+  dplyr::left_join(file_data, by=c("sample"="filename")) %>%
+  ggplot() +
+  geom_point(aes(x=x, y=y, color=group_new), size=1, show.legend = F) +
+  labs(x="PCA 1", y="PCA 2", color="condition")
+
+p2 <- tibble(x=imp_sign_pca$x[,2], y=imp_sign_pca$x[,3],
+       sample=basename(imp_sign$sample)) %>%
+  dplyr::left_join(file_data, by=c("sample"="filename")) %>%
+  ggplot() +
+  geom_point(aes(x=x, y=y, color=group_new), size=1) +
+  labs(x="PCA 2", y="PCA 3", color="condition")
+
+cowplot::plot_grid(p1, p2, rel_widths=c(1, 1.5))
+```
+
+Note that the abundance of clusters per image can already explain these differences.
+
+```{r}
+cluster_count_per_image <- purrr::imap_dfr(cluster_counts, function(mtx, name) {
+  c("image" = name, colSums(mtx))
+}) %>%
+  dplyr::mutate(across(!image, ~ as.numeric(.x)))
+
+tibble(x=imp_sign_pca$x[,1], y=imp_sign_pca$x[,2],
+         sample=basename(imp_sign$sample)) %>%
+  dplyr::left_join(cluster_count_per_image, by=c("sample"="image")) %>%
+  dplyr::select(x, y, sample, `19`, `2`, `13`, `14`, `41`, `21`) %>%
+  tidyr::pivot_longer(cols=!(c(x, y, sample))) %>%
+  dplyr::mutate(value=log10(value)) %>%
+  ggplot(aes(x=x, y=y, color=value)) +
+  geom_point() +
+  facet_wrap(~name) +
+  scale_color_viridis_c() +
+  labs(color="Log10 Counts")
+```
+
+Here are the PCA results, though the seperation when running MISTy looks somewhat better.
+
+```{r fig.width=10, fig.height=8}
+abund_pca <- stats::prcomp(cluster_count_per_image %>% 
+                             dplyr::select(-image))
+
+purrr::map(c("group_new", "egfr_mdrd", "ckd_stage", "age", "ischemic_time", "sex_m0f1"), function(v) {
+  v <- sym(v)
+  tibble(x=abund_pca$x[,1], y=abund_pca$x[,2],
+         sample=cluster_count_per_image$image) %>%
+    dplyr::left_join(file_data, by=c("sample"="filename")) %>%
+    dplyr::mutate(sex_m0f1 = as.factor(sex_m0f1)) %>%
+    ggplot() +
+    geom_point(aes(x=x, y=y, color=!!v), size=1)
+}) %>%
+  cowplot::plot_grid(plotlist=., ncol=2)
+```
+
+```{r}
+rm(cluster_counts, results)
+gc()
+```
+
+# Results per Group
+
+```{r}
+results.groups <- readRDS(here::here(misty_dir, paste0("DKD_non-DKD_", 
+                                                       config_string, ".RDS")))
+
+for (group in names(results.groups)) {
+  results.groups[[group]]$importances <- results.groups[[group]]$importances %>%
+    dplyr::mutate(Predictor = str_remove(Predictor, "^p_"))
+  
+  # first compute the mean importances per patient, then aggregate
+  results.groups[[group]]$importances.aggregated <- 
+    results.groups[[group]]$importances %>%
+      dplyr::mutate(sample=basename(sample)) %>%
+      dplyr::left_join(file_data %>% dplyr::select(filename, unique_patient_id),
+                       by=c("sample" = "filename")) %>%
+      dplyr::group_by(view, Predictor, Target, unique_patient_id) %>%
+      dplyr::summarise(Importance = mean(Importance), .groups = "drop_last") %>%
+      dplyr::summarise(Importance = mean(Importance), nsamples = n(), .groups = "drop")
+}
+```
+
+```{r}
+cluster_props_per_cond <- cluster_count_per_image %>%
+  dplyr::select(image, all_of(specific_clusters)) %>%
+  dplyr::mutate(unspec = rowSums(cluster_count_per_image[, unspecific_clusters])) %>%
+  tidyr::pivot_longer(cols=!image, names_to="cluster", values_to="count") %>%
+  dplyr::left_join(file_data %>% dplyr::select(filename, group_new), by=c("image"="filename")) %>%
+  dplyr::group_by(group_new, cluster) %>%
+  dplyr::summarise(count = mean(count), .groups = "drop_last") %>%
+  dplyr::mutate(fraction = count / sum(count) * 100, count=NULL) %>%
+  dplyr::ungroup() %>%
+  dplyr::mutate(cluster = paste0("c_", cluster))
+```
+
+## Performance
+
+```{r fig.width=16, fig.height=4}
+purrr::map(names(results.groups), function(cond) {
+  results.groups[[cond]]$improvements %>%
+  dplyr::filter(measure=="intra.R2") %>%
+  dplyr::group_by(target) %>%
+  dplyr::summarise(mean=mean(value), sd=sd(value), .groups="drop") %>%
+  ggplot(aes(x=reorder(target, -mean))) +
+  geom_errorbar(aes(ymin=mean-sd, ymax=mean+sd)) +
+  geom_point(aes(y=mean)) +
+  theme(axis.text.x = element_text(angle=45, hjust=1), 
+        plot.title = element_text(hjust=0.5)) +
+  labs(x="Clusters", y="Intra R2", title=cond)
+}) %>%
+  cowplot::plot_grid(plotlist=., ncol=2)
+
+purrr::map(names(results.groups), function(cond) {
+  results.groups[[cond]]$improvements %>%
+  dplyr::filter(measure=="multi.R2") %>%
+  dplyr::group_by(target) %>%
+  dplyr::summarise(mean=mean(value), sd=sd(value), .groups="drop") %>%
+  ggplot(aes(x=reorder(target, -mean))) +
+  geom_errorbar(aes(ymin=mean-sd, ymax=mean+sd)) +
+  geom_point(aes(y=mean)) +
+  theme(axis.text.x = element_text(angle=45, hjust=1), 
+        plot.title = element_text(hjust=0.5)) +
+  labs(x="Clusters", y="Multi R2", title=cond)
+}) %>%
+  cowplot::plot_grid(plotlist=., ncol=2)
+
+purrr::map(names(results.groups), function(cond) {
+  results.groups[[cond]]$improvements %>%
+  dplyr::filter(measure=="gain.R2") %>%
+  dplyr::group_by(target) %>%
+  dplyr::summarise(mean=mean(value), sd=sd(value), .groups="drop") %>%
+  ggplot(aes(x=reorder(target, -mean))) +
+  geom_errorbar(aes(ymin=mean-sd, ymax=mean+sd)) +
+  geom_point(aes(y=mean)) +
+  theme(axis.text.x = element_text(angle=45, hjust=1), 
+        plot.title = element_text(hjust=0.5)) +
+  labs(x="Clusters", y="Gain R2", title=cond)
+}) %>%
+  cowplot::plot_grid(plotlist=., ncol=2)
+```
+
+How much is the performance related to the abundance?
+
+```{r fig.width=12, fig.height=4}
+purrr::map_dfr(names(results.groups), function(cond) {
+  results.groups[[cond]]$improvements %>%
+    dplyr::filter(measure=="multi.R2") %>%
+    dplyr::group_by(target) %>%
+    dplyr::summarise(mean=mean(value), sd=sd(value), .groups="drop") %>%
+    dplyr::mutate(group_new = cond)
+}) %>%
+  dplyr::left_join(cluster_props_per_cond, by=c("group_new"="group_new", "target"="cluster")) %>%
+  ggplot(aes(x=fraction, y=mean)) +
+  geom_point() +
+  facet_wrap(~group_new) +
+  labs(x="Cluster Fraction [%]", y="Multi R2 [%]")
+
+# without unspecific
+purrr::map_dfr(names(results.groups), function(cond) {
+  results.groups[[cond]]$improvements %>%
+    dplyr::filter(measure=="multi.R2") %>%
+    dplyr::group_by(target) %>%
+    dplyr::summarise(mean=mean(value), sd=sd(value), .groups="drop") %>%
+    dplyr::mutate(group_new = cond)
+}) %>%
+  dplyr::left_join(cluster_props_per_cond, by=c("group_new"="group_new", "target"="cluster")) %>%
+  dplyr::filter(target != "c_unspec") %>%
+  ggplot(aes(x=fraction, y=mean)) +
+  geom_point() +
+  facet_wrap(~group_new) +
+  labs(x="Mean Cluster Fraction [%]", y="Multi R2 [%]", title="Without the Unspecific Cluster")
+```
+
+## Importances
+
+### Control
+
+```{r}
+group_oi <- "Control"
+```
+
+```{r}
+results.groups[[group_oi]] %>% plot_interaction_heatmap(view = "intra", cutoff = 0, clean=TRUE)
+results.groups[[group_oi]] %>% plot_interaction_heatmap(view = name_paraview, cutoff = 0, clean=TRUE)
+```
+
+```{r}
+concat_views_oi <- readRDS(paste0(processed_data_dir, .Platform$file.sep, "concat_views_", config_string, "_", group_oi, ".RDS"))
+```
+
+```{r fig.width=8, fig.height=8}
+conf_list <- list(view.short="intra", view.long="intraview", file.name="intra",
+                  cutoff=1.2, resolution=0.3)
+out <- interaction_communities_info(misty.results=results.groups[[group_oi]], 
+                                    concat.views=concat_views_oi, 
+                                    view.short=conf_list$view.short, 
+                                    view.long=conf_list$view.long,
+                                    cutoff=conf_list$cutoff, res=conf_list$resolution)
+color_func <- circlize::colorRamp2(c(-1, 0, 1), c("blue", "white", "red"))
+plot.igraph(out, 
+            layout=layout_with_fr(out),
+            edge.curved=0.75,
+            vertex.color=igraph::vertex_attr(out)$community,
+            edge.color=color_func(igraph::edge_attr(out)$cor),
+            edge.width=scales::rescale(igraph::edge_attr(out)$weight, to=c(1,10)))
+```
+
+```{r fig.width=8, fig.height=8}
+conf_list <- list(view.short=name_paraview, view.long=name_paraview_long, file.name="para",
+                  cutoff=0.8, resolution=1)
+out <- interaction_communities_info(misty.results=results.groups[[group_oi]], 
+                                    concat.views=concat_views_oi, 
+                                    view.short=conf_list$view.short, 
+                                    view.long=conf_list$view.long,
+                                    cutoff=conf_list$cutoff, res=conf_list$resolution)
+
+color_func <- circlize::colorRamp2(c(-1, 0, 1), c("blue", "white", "red"))
+plot.igraph(out, 
+            layout=layout_with_fr(out),
+            edge.curved=0.75,
+            vertex.color=igraph::vertex_attr(out)$community,
+            edge.color=color_func(igraph::edge_attr(out)$cor),
+            edge.width=scales::rescale(igraph::edge_attr(out)$weight, to=c(1,10)))
+```
+
+### Diabetic-Nephropathy
+
+```{r}
+group_oi <- "Diabetic-Nephropathy"
+```
+
+```{r}
+results.groups[[group_oi]] %>% plot_interaction_heatmap(view = "intra", cutoff = 1, clean=TRUE)
+results.groups[[group_oi]] %>% plot_interaction_heatmap(view = name_paraview, cutoff = 1, clean=TRUE)
+```
+
+```{r}
+concat_views_oi <- readRDS(paste0(processed_data_dir, .Platform$file.sep, "concat_views_", config_string, "_", group_oi, ".RDS"))
+```
+
+```{r fig.width=8, fig.height=8}
+conf_list <- list(view.short="intra", view.long="intraview", file.name="intra",
+                  cutoff=1.2, resolution=0.3)
+out <- interaction_communities_info(misty.results=results.groups[[group_oi]], 
+                                    concat.views=concat_views_oi, 
+                                    view.short=conf_list$view.short, 
+                                    view.long=conf_list$view.long,
+                                    cutoff=conf_list$cutoff, res=conf_list$resolution)
+color_func <- circlize::colorRamp2(c(-1, 0, 1), c("blue", "white", "red"))
+plot.igraph(out, 
+            layout=layout_with_fr(out),
+            edge.curved=0.75,
+            vertex.color=igraph::vertex_attr(out)$community,
+            edge.color=color_func(igraph::edge_attr(out)$cor),
+            edge.width=scales::rescale(igraph::edge_attr(out)$weight, to=c(1,10)))
+```
+
+```{r fig.width=8, fig.height=8}
+conf_list <- list(view.short=name_paraview, view.long=name_paraview_long, file.name="para",
+                  cutoff=0.8, resolution=1)
+out <- interaction_communities_info(misty.results=results.groups[[group_oi]], 
+                                    concat.views=concat_views_oi, 
+                                    view.short=conf_list$view.short, 
+                                    view.long=conf_list$view.long,
+                                    cutoff=conf_list$cutoff, res=conf_list$resolution)
+color_func <- circlize::colorRamp2(c(-1, 1), c("blue", "red"))
+plot.igraph(out, 
+            layout=layout_with_fr(out),
+            edge.curved=0.75,
+            vertex.color=igraph::vertex_attr(out)$community,
+            edge.color=color_func(igraph::edge_attr(out)$cor),
+            edge.width=scales::rescale(igraph::edge_attr(out)$weight, to=c(1,10)))
+```
+
+## Importance Contrasts: Control vs. Diabetic-Nephropathy
+
+```{r}
+plot_contrast_results(misty.results.from=results.groups$Control,
+                      misty.results.to=results.groups$`Diabetic-Nephropathy`,
+                      views=c("intra", name_paraview))
+```
+
+
+
+
+
+
+
