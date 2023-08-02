@@ -9,9 +9,12 @@
 *.html
 
 LOCAL.md
+<<<<<<< HEAD
 
 presentations/
 results/
 archive/
 dkd_data/
 processed_data/
+=======
+>>>>>>> a698351c63d0040d38baa8cdbb7aad0dbcc13770
