@@ -31,33 +31,33 @@ To compare the MISTy importance scores between DKD and non-DKD patients we first
 
 1) Load image data
 
-`Rscript scripts/load_image_data.R`
+* `Rscript scripts/load_image_data.R`
 
 2) Compute views (here)
 
-`Rscript scripts/get_views.R "10_micron" "constant" "20" "" ""`
-`Rscript scripts/get_views.R "1_micron" "gaussian" "15.2" "" "80"`
+* `Rscript scripts/get_views.R "10_micron" "constant" "20" "" ""`
+* `Rscript scripts/get_views.R "1_micron" "gaussian" "15.2" "" "80"`
 
 3) Run misty
 
-`Rscript scripts/run_misty.R "10_micron" "constant" "20" "" ""`
-`Rscript scripts/run_misty.R "1_micron" "gaussian" "15.2" "" "80"`
+* `Rscript scripts/run_misty.R "10_micron" "constant" "20" "" ""`
+* `Rscript scripts/run_misty.R "1_micron" "gaussian" "15.2" "" "80"`
 
 4) Load misty results
 
-`Rscript scripts/load_misty_results.R "10_micron" "constant" "20" "" ""`
-`Rscript scripts/load_misty_results.R "1_micron" "gaussian" "15.2" "" "80"`
+* `Rscript scripts/load_misty_results.R "10_micron" "constant" "20" "" ""`
+* `Rscript scripts/load_misty_results.R "1_micron" "gaussian" "15.2" "" "80"`
 
 5) Concatenate views
 
-`Rscript scripts/concat_views.R "10_micron" "constant" "20" "" ""`
-`Rscript scripts/concat_views.R "1_micron" "gaussian" "15.2" "" "80"`
+* `Rscript scripts/concat_views.R "10_micron" "constant" "20" "" ""`
+* `Rscript scripts/concat_views.R "1_micron" "gaussian" "15.2" "" "80"`
 
 6) Generate report
 
-`Rscript scripts/get_report.R "10_micron" "constant" "20" "" ""`
-`Rscript scripts/get_report.R "1_micron" "gaussian" "15.2" "" "80"`
+* `Rscript scripts/get_report.R "10_micron" "constant" "20" "" ""`
+* `Rscript scripts/get_report.R "1_micron" "gaussian" "15.2" "" "80"`
 
 7) Export misty results
 
-`Rscript scripts/export_data.R`
+* `Rscript scripts/export_data.R`
