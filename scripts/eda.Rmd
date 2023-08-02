@@ -1,0 +1,67 @@
+
+# Exploratory Data Analysis
+
+```{r}
+suppressPackageStartupMessages({
+  library(mistyR)
+  library(tidyverse)
+  library(factoextra)
+  library(png)
+  library(here)
+})
+```
+
+```{r}
+file_data <- readRDS(here::here("processed_data", "file_data.RDS"))
+```
+
+How many patients?
+
+```{r}
+length(unique(file_data$unique_patient_id))
+```
+
+How many patients from each group?
+
+```{r}
+# ckd = chronic kideny disease
+file_data %>%
+  dplyr::count(group)
+```
+
+
+```{r}
+file_data %>%
+  dplyr::select(unique_patient_id, group) %>%
+  dplyr::distinct() %>%
+  dplyr::count(group)
+```
+
+One tissue biopsy per patient.
+
+```{r}
+all((file_data %>%
+       dplyr::select(unique_patient_id, image) %>%
+       dplyr::distinct() %>%
+       dplyr::count(unique_patient_id) %>%
+       dplyr::pull(n)) == 1)
+```
+
+How images do we have per patient?
+
+```{r}
+file_data %>%
+  dplyr::count(unique_patient_id) %>%
+  ggplot() +
+  geom_histogram(aes(x=n), binwidth=1, color="black", fill="navy", alpha=0.5) +
+  scale_x_continuous(breaks=seq(1, 50, by=5)) +
+  labs(y="Count", x="Number of Images per Patient")
+
+file_data %>%
+  dplyr::count(group, unique_patient_id) %>%
+  ggplot() +
+  geom_histogram(aes(x=n), binwidth=1, color="black", fill="navy", alpha=0.5) +
+  scale_x_continuous(breaks=seq(1, 50, by=5)) +
+  labs(y="Count", x="Number of Images per Patient") +
+  facet_wrap(~group, ncol=1)
+```

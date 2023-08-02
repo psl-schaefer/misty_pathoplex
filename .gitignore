@@ -1,0 +1,17 @@
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+.vscode/
+.DS_Store
+
+*.Rproj
+*.html
+
+LOCAL.md
+
+presentations/
+results/
+archive/
+dkd_data/
+processed_data/
