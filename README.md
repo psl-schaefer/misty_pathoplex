@@ -31,7 +31,6 @@ To compare the MISTy importance scores between DKD and non-DKD patients we first
 
 1) Load image data
 
-<<<<<<< HEAD
 `Rscript scripts/load_image_data.R`
 
 2) Compute views (here)
